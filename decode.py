@@ -37,6 +37,18 @@ class DecodingResult:
     error: Optional[str] = None
     analysis: Optional[StringAnalysis] = None
 
+# Colors 클래스는 파일 상단에 추가
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'    # 흐리게
+    RESET = '\033[0m'
+    
 class StringAnalyzer:
     """문자열 분석을 위한 클래스"""
     
@@ -377,32 +389,47 @@ class Decoder:
             'JSON': self.json_decode
         }
 
-        # 모든 ROT 시도 (브루트포스)
-        for i in range(1, 26):
-            if i != 13:  # ROT13은 이미 있으므로 제외
-                decoders[f'Caesar (ROT{i})'] = lambda x, shift=i: self.caesar_decode(x, shift)
-
         for name, decoder in decoders.items():
             result = decoder(input_str)
             if result.success:
                 results[name] = result
-                
-                # 연쇄 디코딩 시도
-                if isinstance(result.data, (str, bytes)):
-                    patterns = self.detect_patterns(result.data)
-                    if patterns:
-                        results[f'{name} (Patterns)'] = DecodingResult(
-                            success=True,
-                            data='\n'.join(patterns)
-                        )
 
-                # zlib 압축 해제 시도
-                if isinstance(result.data, bytes):
-                    zlib_result = self.zlib_decompress(result.data)
-                    if zlib_result.success:
-                        results[f'{name} + ZLIB'] = zlib_result
-
+        # 결과 테이블 출력
+        self._print_summary_table(results)
+        
         return results
+
+    def _print_summary_table(self, results: Dict[str, DecodingResult]) -> None:
+        """결과 요약 테이블 출력"""
+        print(f"\n{Colors.BOLD}Decoding Results Summary{Colors.RESET}")
+        print("=" * 70)
+        print(f"{Colors.BOLD}{'Method':<15} {'Length':>8} {'Entropy':>8} {'Result Preview':<30}{Colors.RESET}")
+        print("-" * 70)
+        
+        for method, result in results.items():
+            if not result.success or method == 'Pattern Detection':
+                continue
+                
+            if result.analysis:
+                if result.analysis.entropy > 6.0:
+                    entropy_color = Colors.RED
+                elif result.analysis.entropy > 4.0:
+                    entropy_color = Colors.YELLOW
+                else:
+                    entropy_color = Colors.GREEN
+                    
+                preview = str(result.data)[:30]
+                if len(str(result.data)) > 30:
+                    preview += "..."
+                    
+                print(
+                    f"{Colors.CYAN}{method:<15}{Colors.RESET} "
+                    f"{result.analysis.length:>8} "
+                    f"{entropy_color}{result.analysis.entropy:>8.2f}{Colors.RESET} "
+                    f"{Colors.DIM}{preview:<30}{Colors.RESET}"
+                )
+        
+        print("-" * 70)
 
     def format_output(self, method: str, result: DecodingResult) -> str:
         """디코딩 결과 포맷팅"""
@@ -471,6 +498,46 @@ class Decoder:
 
         output.append("-" * 50)
         return "\n".join(output)
+
+def format_summary_table(self, results: Dict[str, DecodingResult]) -> str:
+    """모든 디코딩 결과를 테이블로 표시"""
+    output = []
+    output.append(f"\n{Colors.BOLD}Decoding Results Summary{Colors.RESET}")
+    output.append("=" * 70)
+    output.append(f"{Colors.BOLD}{'Method':<15} {'Length':>8} {'Entropy':>8} {'Result Preview':<30}{Colors.RESET}")
+    output.append("-" * 70)
+    
+    for method, result in results.items():
+        if not result.success or method == 'Pattern Detection':
+            continue
+            
+        # 엔트로피에 따른 색상 선택
+        if result.analysis:
+            if result.analysis.entropy > 6.0:
+                entropy_color = Colors.RED
+            elif result.analysis.entropy > 4.0:
+                entropy_color = Colors.YELLOW
+            else:
+                entropy_color = Colors.GREEN
+                
+            preview = str(result.data)[:30]
+            if len(str(result.data)) > 30:
+                preview += "..."
+                
+            output.append(
+                f"{Colors.CYAN}{method:<15}{Colors.RESET} "
+                f"{result.analysis.length:>8} "
+                f"{entropy_color}{result.analysis.entropy:>8.2f}{Colors.RESET} "
+                f"{Colors.DIM}{preview:<30}{Colors.RESET}"
+            )
+    
+    output.append("-" * 70)
+    return "\n".join(output)
+
+def decode_all(self, input_str: str) -> Dict[str, DecodingResult]:
+    results = super().decode_all(input_str)
+    print(self.format_summary_table(results))  # 테이블 출력 추가
+    return results
 
 def main():
     if len(sys.argv) != 2:
