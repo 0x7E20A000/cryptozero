@@ -309,36 +309,41 @@ class Decoder:
 
     def format_output(self, method: str, result: DecodingResult) -> str:
         """디코딩 결과 포맷팅과 시각화"""
-        output = [f"\n{'='*20} {method} {'='*20}"]
+        output = []
         
-        # 데이터 출력
+        # 성공한 디코딩 결과만 표시
+        if not result.success:
+            return ""
+            
+        # 간단한 구분선으로 변경
+        output.append(f"\n[{method}]")
+        
+        # 데이터 출력을 더 실용적으로
         if isinstance(result.data, bytes):
             try:
                 decoded_str = result.data.decode('utf-8')
-                output.append(f"\n[데이터 (UTF-8)]:\n{decoded_str}")
+                output.append(f"Result: {decoded_str}")
+                output.append(f"Hex: {result.data.hex()[:50]}..." if len(result.data) > 25 else result.data.hex())
             except UnicodeDecodeError:
-                output.append(f"\n[바이너리 데이터]: {len(result.data)} bytes")
-                output.append(f"Hex (처음 100바이트): {result.data.hex()[:100]}...")
+                output.append(f"Binary ({len(result.data)} bytes)")
+                output.append(f"Hex: {result.data.hex()[:50]}...")
         else:
-            output.append(f"\n[데이터]:\n{result.data}")
+            output.append(f"Result: {result.data}")
 
-        # 분석 결과 시각화
+        # 중요 메트릭만 간단히 표시
         if result.analysis:
-            output.append("\n[분석 결과]")
-            output.append(self.viz.create_entropy_meter(result.analysis.entropy))
-            output.append(self.viz.create_printable_meter(result.analysis.printable_ratio))
-            output.append(f"길이: {result.analysis.length} {'bytes' if result.analysis.is_binary else 'chars'}")
-            output.append(f"고유 문자 수: {result.analysis.unique_chars}")
+            output.append(f"Length: {result.analysis.length} | Entropy: {result.analysis.entropy:.2f} | Unique chars: {result.analysis.unique_chars}")
             
-            # 빈도 분석 히스토그램
-            output.append("\n[빈도 분석] (상위 10개)")
-            if result.analysis.is_binary:
-                freq_data = dict(list(result.analysis.byte_frequencies.items())[:10])
-            else:
-                freq_data = dict(list(result.analysis.character_frequencies.items())[:10])
-            output.append(self.viz.create_histogram(freq_data))
+            # 특이사항이 있는 경우만 빈도 분석 표시
+            if result.analysis.entropy > 4.0 or result.analysis.unique_chars < 5:
+                output.append("\nFrequency Analysis (Top 5):")
+                freq_data = dict(list(
+                    (result.analysis.byte_frequencies if result.analysis.is_binary 
+                    else result.analysis.character_frequencies).items())[:5]
+                )
+                output.append(self.viz.create_histogram(freq_data, max_width=30))
 
-        output.append("=" * (42 + len(method)))
+        output.append("-" * 50)
         return "\n".join(output)
 
 def main():
