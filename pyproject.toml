@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "cryptozero"
+version = "0.1.0"
+description = ""
+authors = ["0x7E20A000 <0x7E20@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "3.11.10"
+cryptography = "^43.0.3"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
