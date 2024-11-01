@@ -8,10 +8,11 @@ import json
 import html
 import math
 import collections
-from typing import Optional, Dict, Any, Union, Callable, Tuple
+from typing import Optional, Dict, Any, Union, Callable, Tuple, List
 from dataclasses import dataclass
 from functools import wraps
 import logging
+import re
 
 # 로깅 설정
 logging.basicConfig(format='%(levelname)s: %(message)s', level=logging.INFO)
@@ -187,6 +188,28 @@ class Decoder:
         self.REVERSE_MORSE = {v: k for k, v in self.MORSE_CODE.items()}
         self.viz = VisualizationHelper()
 
+        # 기존 코드 유지
+        self.common_patterns = {
+            'php_magic': r'<\?php|eval|system|exec|passthru|shell_exec',
+            'sql_injection': r'UNION|SELECT|FROM|WHERE|CONCAT|GROUP_BY',
+            'xss': r'<script|javascript:|onerror=|onload=',
+            'path_traversal': r'\.\.\/|\.\.\\',
+            'command_injection': r';ls|;cat|;pwd|;id|;whoami',
+            'hex_encoded': r'\\x[0-9a-fA-F]{2}',
+            'base64_pattern': r'^[A-Za-z0-9+/]*={0,2}$',
+            'jwt_pattern': r'^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$'
+        }
+        
+        # 일반적인 CTF 플래그 포맷 패턴
+        self.flag_patterns = [
+            r'flag{.*}',
+            r'CTF{.*}',
+            r'KEY{.*}',
+            r'picoCTF{.*}',
+            r'FLAG_[a-zA-Z0-9]{16,}',
+            r'[a-fA-F0-9]{32}'  # MD5 해시 패턴
+        ]
+
     @decode_handler
     def base64_decode(self, s: str) -> Optional[bytes]:
         """Base64 디코딩"""
@@ -274,6 +297,55 @@ class Decoder:
         obj = json.loads(s)
         return json.dumps(obj, indent=2, ensure_ascii=False)
 
+    def detect_patterns(self, data: Union[str, bytes]) -> List[str]:
+        """알려진 패턴 탐지"""
+        if isinstance(data, bytes):
+            try:
+                data = data.decode('utf-8', errors='ignore')
+            except:
+                return []
+
+        findings = []
+        # 패턴 검사
+        for pattern_name, pattern in self.common_patterns.items():
+            if re.search(pattern, data, re.IGNORECASE):
+                findings.append(f"Found {pattern_name} pattern")
+        
+        # 플래그 포맷 검사
+        for pattern in self.flag_patterns:
+            match = re.search(pattern, data)
+            if match:
+                findings.append(f"Possible flag found: {match.group(0)}")
+        
+        return findings
+
+    @decode_handler
+    def hex_decode(self, s: str) -> Optional[bytes]:
+        """16진수 디코딩"""
+        try:
+            # 0x 또는 \x 형식 모두 처리
+            s = s.replace('0x', '').replace('\\x', '').replace(' ', '')
+            return bytes.fromhex(s)
+        except:
+            return None
+
+    @decode_handler
+    def binary_decode(self, s: str) -> Optional[str]:
+        """2진수 문자열 디코딩"""
+        try:
+            # 공백과 0b 제거
+            s = s.replace(' ', '').replace('0b', '')
+            # 8비트 단위로 분할
+            chunks = [s[i:i+8] for i in range(0, len(s), 8)]
+            return ''.join(chr(int(chunk, 2)) for chunk in chunks)
+        except:
+            return None
+
+    @decode_handler
+    def reverse_string(self, s: str) -> str:
+        """문자열 뒤집기"""
+        return s[::-1]
+
     def decode_all(self, input_str: str) -> Dict[str, DecodingResult]:
         """모든 가능한 디코딩 시도"""
         results = {}
@@ -282,24 +354,49 @@ class Decoder:
         input_analysis = StringAnalyzer.analyze(input_str)
         results['Original'] = DecodingResult(success=True, data=input_str, analysis=input_analysis)
         
-        # 기본 디코딩
+        # 패턴 탐지 결과 추가
+        patterns = self.detect_patterns(input_str)
+        if patterns:
+            results['Pattern Detection'] = DecodingResult(
+                success=True, 
+                data='\n'.join(patterns)
+            )
+        
+        # CTF용 디코더 추가
         decoders = {
             'Base64': self.base64_decode,
             'Base64 URL-safe': self.base64url_decode,
             'URL': self.url_decode,
             'ROT13': self.rot13_decode,
+            'Hex': self.hex_decode,
+            'Binary': self.binary_decode,
+            'Reverse': self.reverse_string,
             'JWT': self.jwt_decode,
             'Morse': self.morse_decode,
             'Caesar (ROT13)': lambda x: self.caesar_decode(x, 13),
             'JSON': self.json_decode
         }
 
+        # 모든 ROT 시도 (브루트포스)
+        for i in range(1, 26):
+            if i != 13:  # ROT13은 이미 있으므로 제외
+                decoders[f'Caesar (ROT{i})'] = lambda x, shift=i: self.caesar_decode(x, shift)
+
         for name, decoder in decoders.items():
             result = decoder(input_str)
             if result.success:
                 results[name] = result
                 
-                # zlib 압축 해제 시도 (바이너리 결과에 대해)
+                # 연쇄 디코딩 시도
+                if isinstance(result.data, (str, bytes)):
+                    patterns = self.detect_patterns(result.data)
+                    if patterns:
+                        results[f'{name} (Patterns)'] = DecodingResult(
+                            success=True,
+                            data='\n'.join(patterns)
+                        )
+
+                # zlib 압축 해제 시도
                 if isinstance(result.data, bytes):
                     zlib_result = self.zlib_decompress(result.data)
                     if zlib_result.success:
@@ -308,39 +405,42 @@ class Decoder:
         return results
 
     def format_output(self, method: str, result: DecodingResult) -> str:
-        """디코딩 결과 포맷팅과 시각화"""
-        output = []
-        
-        # 성공한 디코딩 결과만 표시
+        """디코딩 결과 포맷팅"""
         if not result.success:
             return ""
             
-        # 간단한 구분선으로 변경
-        output.append(f"\n[{method}]")
+        output = [f"\n[{method}]"]
         
-        # 데이터 출력을 더 실용적으로
+        # 데이터 출력
         if isinstance(result.data, bytes):
             try:
                 decoded_str = result.data.decode('utf-8')
-                output.append(f"Result: {decoded_str}")
-                output.append(f"Hex: {result.data.hex()[:50]}..." if len(result.data) > 25 else result.data.hex())
+                output.append(f"UTF-8: {decoded_str}")
+                output.append(f"Hex: {result.data.hex()[:50]}" + ("..." if len(result.data) > 25 else ""))
+                output.append(f"Raw bytes: {repr(result.data)}")
             except UnicodeDecodeError:
                 output.append(f"Binary ({len(result.data)} bytes)")
                 output.append(f"Hex: {result.data.hex()[:50]}...")
         else:
             output.append(f"Result: {result.data}")
 
-        # 중요 메트릭만 간단히 표시
+        # 분석 결과
         if result.analysis:
-            output.append(f"Length: {result.analysis.length} | Entropy: {result.analysis.entropy:.2f} | Unique chars: {result.analysis.unique_chars}")
+            output.append(f"\nStats: len={result.analysis.length} | "
+                         f"entropy={result.analysis.entropy:.2f} | "
+                         f"unique_chars={result.analysis.unique_chars}")
             
-            # 특이사항이 있는 경우만 빈도 분석 표시
-            if result.analysis.entropy > 4.0 or result.analysis.unique_chars < 5:
-                output.append("\nFrequency Analysis (Top 5):")
+            # 높은 엔트로피는 암호화/인코딩된 데이터일 수 있음
+            if result.analysis.entropy > 4.0:
+                output.append("Note: High entropy - possible encryption/encoding")
+            
+            # 특이한 문자 분포 표시
+            if result.analysis.unique_chars < 5 or result.analysis.entropy > 4.0:
                 freq_data = dict(list(
                     (result.analysis.byte_frequencies if result.analysis.is_binary 
                     else result.analysis.character_frequencies).items())[:5]
                 )
+                output.append("\nTop 5 chars:")
                 output.append(self.viz.create_histogram(freq_data, max_width=30))
 
         output.append("-" * 50)
