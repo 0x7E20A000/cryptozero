@@ -406,42 +406,68 @@ class Decoder:
 
     def format_output(self, method: str, result: DecodingResult) -> str:
         """디코딩 결과 포맷팅"""
-        if not result.success:
+        if not result.success or method == 'Pattern Detection':
             return ""
-            
-        output = [f"\n[{method}]"]
         
-        # 데이터 출력
+        output = []
+        
+        # 1. 분석 보고서 (Original만)
+        if method == 'Original':
+            output.append("\nAnalysis Report")
+            output.append("=" * 50)
+            
+        output.append(f"\n[{method}]")
+        
+        # 2. 핵심 데이터
         if isinstance(result.data, bytes):
             try:
                 decoded_str = result.data.decode('utf-8')
-                output.append(f"UTF-8: {decoded_str}")
-                output.append(f"Hex: {result.data.hex()[:50]}" + ("..." if len(result.data) > 25 else ""))
-                output.append(f"Raw bytes: {repr(result.data)}")
+                output.append(f"▶ {decoded_str}")
             except UnicodeDecodeError:
-                output.append(f"Binary ({len(result.data)} bytes)")
-                output.append(f"Hex: {result.data.hex()[:50]}...")
+                output.append(f"▶ Binary data ({len(result.data)} bytes)")
         else:
-            output.append(f"Result: {result.data}")
+            output.append(f"▶ {result.data}")
 
-        # 분석 결과
+        # 3. Original일 때만 상세 분석
+        if method == 'Original' and result.analysis:
+            # 기본 메트릭
+            output.append(f"\nLength: {result.analysis.length} | Unique chars: {result.analysis.unique_chars}")
+            
+            # 엔트로피 시각화
+            entropy_bar = "▁▂▃▄▅▆▇█"[int((result.analysis.entropy / 8.0) * 7)]
+            output.append(f"Entropy: {entropy_bar} {result.analysis.entropy:.2f}/8.0")
+            
+            # 알파벳 분포 시각화 (A-Z 또는 a-z가 있는 경우만)
+            char_freq = result.analysis.character_frequencies
+            alpha_dist = {c: char_freq.get(c, 0) for c in 'abcdefghijklmnopqrstuvwxyz'}
+            if any(alpha_dist.values()):
+                output.append("\nCharacter distribution (a-z):")
+                max_freq = max(alpha_dist.values()) if alpha_dist.values() else 1
+                dist_line = ""
+                for c, freq in alpha_dist.items():
+                    if freq > 0:
+                        height = int((freq / max_freq) * 7)
+                        dist_line += "▁▂▃▄▅▆▇█"[height]
+                    else:
+                        dist_line += "."
+                output.append(dist_line)
+                output.append("abcdefghijklmnopqrstuvwxyz")
+
+        # 4. 패턴 매칭 결과
+        patterns = self.detect_patterns(result.data)
+        if patterns:
+            output.append("\nDetected:")
+            output.append("  " + "\n  ".join(patterns))
+
+        # 5. 특이사항
         if result.analysis:
-            output.append(f"\nStats: len={result.analysis.length} | "
-                         f"entropy={result.analysis.entropy:.2f} | "
-                         f"unique_chars={result.analysis.unique_chars}")
-            
-            # 높은 엔트로피는 암호화/인코딩된 데이터일 수 있음
+            notes = []
             if result.analysis.entropy > 4.0:
-                output.append("Note: High entropy - possible encryption/encoding")
-            
-            # 특이한 문자 분포 표시
-            if result.analysis.unique_chars < 5 or result.analysis.entropy > 4.0:
-                freq_data = dict(list(
-                    (result.analysis.byte_frequencies if result.analysis.is_binary 
-                    else result.analysis.character_frequencies).items())[:5]
-                )
-                output.append("\nTop 5 chars:")
-                output.append(self.viz.create_histogram(freq_data, max_width=30))
+                notes.append("High entropy detected")
+            if result.analysis.unique_chars < 5:
+                notes.append("Low character variety")
+            if notes:
+                output.append("\nNotes: " + " | ".join(notes))
 
         output.append("-" * 50)
         return "\n".join(output)
